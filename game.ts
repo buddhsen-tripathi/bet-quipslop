@@ -220,6 +220,7 @@ export async function callGeneratePrompt(model: Model): Promise<string> {
     system,
     prompt:
       "Generate a single original Quiplash prompt. Be creative and don't repeat common patterns.",
+    abortSignal: AbortSignal.timeout(30_000),
   });
 
   log("INFO", `prompt:${model.name}`, "Raw response", {
@@ -241,6 +242,7 @@ export async function callGenerateAnswer(
     model: openrouter.chat(model.id),
     system: `You are playing Quiplash! You'll be given a fill-in-the-blank prompt. Give the FUNNIEST possible answer. Be creative, edgy, unexpected, and concise. Reply with ONLY your answer — no quotes, no explanation, no preamble. Keep it short (under 12 words). Keep it concise and witty.`,
     prompt: `Fill in the blank: ${prompt}`,
+    abortSignal: AbortSignal.timeout(30_000),
   });
 
   log("INFO", `answer:${model.name}`, "Raw response", {
@@ -280,6 +282,7 @@ Example response:
 A
 25`,
     prompt: `Prompt: "${prompt}"\n\nContestant A: ${contestantA.name}\nContestant B: ${contestantB.name}\n\nWho do you think will be funnier? Place your blind bet!`,
+    abortSignal: AbortSignal.timeout(30_000),
   });
 
   log("INFO", `blindbet:${voter.name}`, "Raw response", { rawText: text, usage });
@@ -324,6 +327,7 @@ Example response:
 A
 crying laughing`,
     prompt: `Prompt: "${prompt}"\n\nAnswer A: "${a.answer}"\nAnswer B: "${b.answer}"\n\nWhich is funnier?`,
+    abortSignal: AbortSignal.timeout(30_000),
   });
 
   log("INFO", `vote:${voter.name}`, "Raw response", { rawText: text, usage });
