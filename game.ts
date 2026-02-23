@@ -255,7 +255,7 @@ export async function callBlindBet(
   prompt: string,
   contestantA: Model,
   contestantB: Model,
-): Promise<{ side: "A" | "B"; confidence: 15 | 25 | 45 }> {
+): Promise<{ side: "A" | "B"; confidence: 15 | 25 | 50 }> {
   log("INFO", `blindbet:${voter.name}`, "Calling API", {
     modelId: voter.id,
     prompt,
@@ -274,7 +274,7 @@ Think about each model's comedy style, strengths, and how they might approach th
 
 Respond in EXACTLY this format (two lines):
 Line 1: A or B (which contestant you're betting on)
-Line 2: 15, 25, or 45 (your confidence — how much you're willing to wager)
+Line 2: 15, 25, or 50 (your confidence — how much you're willing to wager)
 
 Example response:
 A
@@ -291,8 +291,8 @@ A
     throw new Error(`Invalid blind bet: "${text.trim()}"`);
   }
 
-  const confidence: 15 | 25 | 45 =
-    confLine === 15 ? 15 : confLine === 45 ? 45 : 25;
+  const confidence: 15 | 25 | 50 =
+    confLine === 15 ? 15 : confLine === 50 ? 50 : 25;
 
   return {
     side: sideLine.startsWith("A") ? "A" : "B",
