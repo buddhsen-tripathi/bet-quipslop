@@ -15,7 +15,9 @@ export const MODELS = [
   { id: "anthropic/claude-opus-4.6", name: "Opus 4.6" },
   { id: "anthropic/claude-sonnet-4.6", name: "Sonnet 4.6" },
   { id: "x-ai/grok-4.1-fast", name: "Grok 4.1" },
-  // { id: "minimax/minimax-m2.5", name: "MiniMax 2.5" },
+  { id: "minimax/minimax-m2.5", name: "MiniMax 2.5" },
+  { id: "qwen/qwen3-235b-a22b", name: "Qwen 3" },
+  { id: "google/gemma-3-27b-it", name: "Gemma 3" },
 ] as const;
 
 export type Model = (typeof MODELS)[number];
@@ -31,6 +33,8 @@ export const MODEL_COLORS: Record<string, string> = {
   "Sonnet 4.6": "red",
   "Grok 4.1": "white",
   "MiniMax 2.5": "magentaBright",
+  "Qwen 3": "blueBright",
+  "Gemma 3": "magenta",
 };
 
 export const NAME_PAD = 16;
@@ -71,6 +75,7 @@ export type RoundState = {
   viewerVotesA?: number;
   viewerVotesB?: number;
   viewerVotingEndsAt?: number;
+  votingPhaseEndsAt?: number;
 };
 
 export type GameState = {
@@ -83,6 +88,7 @@ export type GameState = {
   generation: number;
   modelBalances: Record<string, number>;
   eliminatedModels: string[];
+  viewerBalance: number;
 };
 
 // ── OpenRouter ──────────────────────────────────────────────────────────────
@@ -233,11 +239,7 @@ export async function callGenerateAnswer(
   });
   const { text, usage, reasoning } = await generateText({
     model: openrouter.chat(model.id),
-    system: `You are playing Quiplash! You'll be given a fill-in-the-blank prompt. Give the FUNNIEST possible answer.
-
-IMPORTANT: You MUST answer in full Gen Z slang. Use brainrot language, internet slang, and zoomer speak. Think: "no cap", "fr fr", "lowkey", "sus", "its giving", "slay", "rizz", "sigma", "skibidi", "based", "bussin", "delulu", "understood the assignment", "main character energy", "rent free", "vibe check", "ick", "ate and left no crumbs", etc.
-
-Reply with ONLY your answer — no quotes, no explanation, no preamble. Keep it short (under 15 words). Keep it unhinged and chronically online.`,
+    system: `You are playing Quiplash! You'll be given a fill-in-the-blank prompt. Give the FUNNIEST possible answer. Be creative, edgy, unexpected, and concise. Reply with ONLY your answer — no quotes, no explanation, no preamble. Keep it short (under 12 words). Keep it concise and witty.`,
     prompt: `Fill in the blank: ${prompt}`,
   });
 
@@ -537,6 +539,12 @@ export async function runGame(
     // ── Blind betting phase ── (before answers, models bet on who they think will be funnier)
     round.phase = "betting";
     round.votes = voters.map((v) => ({ voter: v, startedAt: Date.now() }));
+
+    // Initialize viewer voting at the start of betting (viewers can vote alongside judges)
+    round.viewerVotesA = 0;
+    round.viewerVotesB = 0;
+    round.viewerVotingEndsAt = Date.now() + 180_000; // generous window covering betting + answering + voting
+    onViewerVotingStart?.(round);
     rerender();
 
     await Promise.all(
@@ -573,6 +581,7 @@ export async function runGame(
     const answerStart = Date.now();
     round.answerTasks[0].startedAt = answerStart;
     round.answerTasks[1].startedAt = answerStart;
+
     rerender();
 
     await Promise.all(
@@ -611,6 +620,7 @@ export async function runGame(
 
     // ── Vote phase ── (models now vote after seeing answers, bets were already locked in)
     round.phase = "voting";
+    round.votingPhaseEndsAt = Date.now() + 30_000;
     const answerA = round.answerTasks[0].result!;
     const answerB = round.answerTasks[1].result!;
     const voteStart = Date.now();
@@ -619,11 +629,6 @@ export async function runGame(
       v.startedAt = voteStart;
     }
 
-    // Initialize viewer voting
-    round.viewerVotesA = 0;
-    round.viewerVotesB = 0;
-    round.viewerVotingEndsAt = Date.now() + 30_000;
-    onViewerVotingStart?.(round);
     rerender();
 
     await Promise.all([
@@ -700,25 +705,43 @@ export async function runGame(
       state.scores[contB.name] = (state.scores[contB.name] || 0) + 1;
     }
 
-    // ── Settle model bets (pool-based) ──
+    // ── Settle bets (pool-based, viewers included) ──
     const winner: "A" | "B" | "tie" =
       votesA > votesB ? "A" : votesB > votesA ? "B" : "tie";
 
+    // Viewer vote scoring
+    const vvA = round.viewerVotesA ?? 0;
+    const vvB = round.viewerVotesB ?? 0;
+    if (vvA > vvB) {
+      state.viewerScores[contA.name] = (state.viewerScores[contA.name] || 0) + 1;
+    } else if (vvB > vvA) {
+      state.viewerScores[contB.name] = (state.viewerScores[contB.name] || 0) + 1;
+    }
+
+    // Determine viewer bet side ($25 into the pool)
+    const VIEWER_BET = 25;
+    const viewerPick: "A" | "B" | null = vvA > vvB ? "A" : vvB > vvA ? "B" : null;
+    const viewerInPool = viewerPick !== null && state.viewerBalance >= VIEWER_BET;
+
+    // Calculate pool including viewer bet
     const validBets = round.votes.filter((v) => v.betSide && v.betAmount);
-    const totalPool = validBets.reduce((s, v) => s + (v.betAmount ?? 0), 0);
-    const winnerPool = validBets
+    const modelPool = validBets.reduce((s, v) => s + (v.betAmount ?? 0), 0);
+    const totalPool = modelPool + (viewerInPool ? VIEWER_BET : 0);
+
+    const modelWinnerPool = validBets
       .filter((v) => v.betSide === winner)
       .reduce((s, v) => s + (v.betAmount ?? 0), 0);
+    const viewerOnWinningSide = viewerInPool && viewerPick === winner;
+    const winnerPool = modelWinnerPool + (viewerOnWinningSide ? VIEWER_BET : 0);
 
+    // Settle model bets
     for (const v of round.votes) {
       if (!v.betSide || !v.betAmount) continue;
       const voterName = v.voter.name;
 
       if (winner === "tie") {
-        // Tie — everyone gets their bet back, no change
         v.betResult = 0;
       } else if (v.betSide === winner) {
-        // Won — get proportional share of the total pool
         const payout = winnerPool > 0
           ? Math.round((v.betAmount / winnerPool) * totalPool)
           : v.betAmount;
@@ -727,12 +750,10 @@ export async function runGame(
         state.modelBalances[voterName] =
           (state.modelBalances[voterName] ?? 0) + profit;
       } else {
-        // Lost — lose entire bet (it goes into the pool for winners)
         v.betResult = -v.betAmount;
         state.modelBalances[voterName] =
           (state.modelBalances[voterName] ?? 0) - v.betAmount;
 
-        // Check for elimination
         if ((state.modelBalances[voterName] ?? 0) <= 0) {
           state.modelBalances[voterName] = 0;
           if (!state.eliminatedModels.includes(voterName)) {
@@ -756,13 +777,29 @@ export async function runGame(
       });
     }
 
-    // Viewer vote scoring
-    const vvA = round.viewerVotesA ?? 0;
-    const vvB = round.viewerVotesB ?? 0;
-    if (vvA > vvB) {
-      state.viewerScores[contA.name] = (state.viewerScores[contA.name] || 0) + 1;
-    } else if (vvB > vvA) {
-      state.viewerScores[contB.name] = (state.viewerScores[contB.name] || 0) + 1;
+    // Settle viewer bet (same pool logic)
+    if (viewerInPool && winner !== "tie") {
+      if (viewerOnWinningSide) {
+        const payout = winnerPool > 0
+          ? Math.round((VIEWER_BET / winnerPool) * totalPool)
+          : VIEWER_BET;
+        const profit = payout - VIEWER_BET;
+        state.viewerBalance += profit;
+        log("INFO", "bet:settle", `Viewers bet $${VIEWER_BET} on ${viewerPick} → +${profit} (pool: $${totalPool})`, {
+          viewerBet: VIEWER_BET,
+          side: viewerPick,
+          profit,
+          balance: state.viewerBalance,
+        });
+      } else {
+        state.viewerBalance = Math.max(0, state.viewerBalance - VIEWER_BET);
+        log("INFO", "bet:settle", `Viewers bet $${VIEWER_BET} on ${viewerPick} → -${VIEWER_BET} (pool: $${totalPool})`, {
+          viewerBet: VIEWER_BET,
+          side: viewerPick,
+          loss: -VIEWER_BET,
+          balance: state.viewerBalance,
+        });
+      }
     }
 
     rerender();

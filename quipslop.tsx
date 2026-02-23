@@ -230,6 +230,7 @@ function Game({ runs }: { runs: number }) {
     generation: 0,
     modelBalances: Object.fromEntries(MODELS.map((m) => [m.name, 1000])),
     eliminatedModels: [],
+    viewerBalance: 1000,
   });
   const [, setTick] = useState(0);
   const rerender = useCallback(() => setTick((t) => t + 1), []);

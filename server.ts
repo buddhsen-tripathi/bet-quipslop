@@ -73,6 +73,7 @@ const gameState: GameState = {
   generation: 0,
   modelBalances: initialModelBalances,
   eliminatedModels: [],
+  viewerBalance: 1000,
 };
 
 // ── Guardrails ──────────────────────────────────────────────────────────────
@@ -393,20 +394,13 @@ async function sendFossabotChatMessage(messageText: string): Promise<void> {
 
 function applyViewerVote(voterId: string, side: ViewerVoteSide): boolean {
   const round = gameState.active;
-  if (!round || round.phase !== "voting") return false;
+  if (!round || (round.phase !== "betting" && round.phase !== "answering" && round.phase !== "voting")) return false;
   if (!round.viewerVotingEndsAt || Date.now() > round.viewerVotingEndsAt) {
     return false;
   }
 
-  const previousVote = viewerVoters.get(voterId);
-  if (previousVote === side) return false;
-
-  // Undo previous vote if this viewer switched sides.
-  if (previousVote === "A") {
-    round.viewerVotesA = Math.max(0, (round.viewerVotesA ?? 0) - 1);
-  } else if (previousVote === "B") {
-    round.viewerVotesB = Math.max(0, (round.viewerVotesB ?? 0) - 1);
-  }
+  // Vote is locked per IP — once selected, cannot change
+  if (viewerVoters.has(voterId)) return false;
 
   viewerVoters.set(voterId, side);
   if (side === "A") {
@@ -442,6 +436,7 @@ function getClientState() {
     generation: gameState.generation,
     modelBalances: gameState.modelBalances,
     eliminatedModels: gameState.eliminatedModels,
+    viewerBalance: gameState.viewerBalance,
   };
 }
 
@@ -728,6 +723,7 @@ const server = Bun.serve<WsData>({
       gameState.viewerScores = Object.fromEntries(MODELS.map((m) => [m.name, 0]));
       gameState.modelBalances = Object.fromEntries(MODELS.map((m) => [m.name, 1000]));
       gameState.eliminatedModels = [];
+      gameState.viewerBalance = 1000;
       gameState.done = false;
       gameState.isPaused = true;
       gameState.generation += 1;
@@ -893,11 +889,23 @@ const server = Bun.serve<WsData>({
           version: VERSION,
         }),
       );
+      // If this IP already voted this round, remind them
+      const existingVote = viewerVoters.get(ws.data.ip);
+      if (existingVote) {
+        ws.send(JSON.stringify({ type: "vote_ack", side: existingVote }));
+      }
       // Notify everyone else with just the viewer count
       broadcastViewerCount();
     },
-    message() {
-      // Viewer voting moved to Twitch chat via Fossabot.
+    message(ws, raw) {
+      let msg: { type?: string; side?: string };
+      try { msg = JSON.parse(String(raw)); } catch { return; }
+
+      if (msg.type === "vote" && (msg.side === "A" || msg.side === "B")) {
+        const applied = applyViewerVote(ws.data.ip, msg.side as ViewerVoteSide);
+        ws.send(JSON.stringify({ type: "vote_ack", side: msg.side }));
+        if (applied) scheduleViewerVoteBroadcast();
+      }
     },
     close(ws) {
       clients.delete(ws);

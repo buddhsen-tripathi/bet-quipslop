@@ -151,6 +151,68 @@ body {
   color: var(--text);
 }
 
+/* ── Vote Buttons ──────────────────────────────────────────────── */
+
+.vote-buttons {
+  display: flex;
+  gap: 10px;
+  margin: 16px 0;
+}
+
+.vote-btn {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--btn-color, var(--text-muted));
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 4px;
+  padding: 8px 16px;
+  cursor: pointer;
+  transition: border-color 0.2s, box-shadow 0.2s, background 0.2s;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.vote-btn:hover {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: var(--btn-color, var(--text-muted));
+}
+
+.vote-btn--selected {
+  border-color: var(--btn-color, var(--text-muted));
+  box-shadow: 0 0 8px color-mix(in srgb, var(--btn-color, var(--text-muted)) 40%, transparent);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.vote-btn:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+
+.vote-btn:disabled:hover {
+  background: rgba(255, 255, 255, 0.03);
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+.vote-btn--selected:disabled {
+  opacity: 1;
+  cursor: default;
+}
+
+.vote-btn--selected:disabled:hover {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: var(--btn-color, var(--text-muted));
+}
+
+.vote-btn__check {
+  font-size: 13px;
+  line-height: 1;
+}
+
 /* ── Prompt ───────────────────────────────────────────────────── */
 
 .prompt {
@@ -492,6 +554,32 @@ body {
   color: var(--text);
 }
 
+/* ── Viewer Balance ─────────────────────────────────────────── */
+
+.viewer-balance {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.viewer-balance__label {
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.viewer-balance__amount {
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 700;
+  color: #4ade80;
+}
+
 /* ── Leaderboard Section ─────────────────────────────────────── */
 
 .lb-section {
@@ -660,6 +748,147 @@ body {
 .game-over__sub {
   font-size: 14px;
   color: var(--text-dim);
+}
+
+.game-over__runner-up {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--mono);
+  font-size: 14px;
+}
+
+.game-over__runner-up-label {
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.game-over__runner-up-score {
+  color: var(--text-dim);
+}
+
+.game-over__inline-logo {
+  width: 16px;
+  height: 16px;
+  vertical-align: -2px;
+  margin-right: 4px;
+}
+
+.game-over__standings,
+.game-over__viewer-summary,
+.game-over__eliminations {
+  width: 100%;
+  max-width: 480px;
+  text-align: left;
+}
+
+.game-over__section-label {
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 8px;
+}
+
+.game-over__table {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.game-over__row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-family: var(--mono);
+  font-size: 13px;
+  padding: 4px 0;
+}
+
+.game-over__row--eliminated {
+  opacity: 0.4;
+}
+
+.game-over__row-rank {
+  width: 32px;
+  text-align: center;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+.game-over__row-name {
+  flex: 1;
+  display: flex;
+  align-items: center;
+}
+
+.game-over__row-score {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.game-over__row-balance {
+  color: #4ade80;
+  font-size: 12px;
+  min-width: 50px;
+  text-align: right;
+}
+
+.game-over__row-balance--zero {
+  color: #ef4444;
+}
+
+.game-over__viewer-balance,
+.game-over__viewer-fav {
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--text-muted);
+  padding: 4px 0;
+}
+
+.game-over__viewer-balance strong {
+  color: #4ade80;
+}
+
+.game-over__elim-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.game-over__elim-chip {
+  font-family: var(--mono);
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.game-over__elim-num {
+  color: var(--text-dim);
+}
+
+.game-over__history-link {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text-muted);
+  text-decoration: none;
+  border: 1px solid var(--border);
+  padding: 8px 20px;
+  border-radius: 4px;
+  transition: color 0.2s, border-color 0.2s;
+}
+
+.game-over__history-link:hover {
+  color: var(--text);
+  border-color: var(--text-muted);
 }
 
 /* ── Next Round Toast ─────────────────────────────────────────── */

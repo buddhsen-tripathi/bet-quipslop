@@ -42,6 +42,7 @@ type GameState = {
   generation: number;
   modelBalances: Record<string, number>;
   eliminatedModels: string[];
+  viewerBalance?: number;
 };
 type StateMessage = {
   type: "state";
@@ -63,9 +64,11 @@ const MODEL_COLORS: Record<string, string> = {
   "GLM-5": "#1F63EC",
   "GPT-5.2": "#10A37F",
   "Opus 4.6": "#D97757",
-  "Sonnet 4.6": "#D97757",
+  "Sonnet 4.6": "#E8956A",
   "Grok 4.1": "#FFFFFF",
   "MiniMax 2.5": "#FF3B30",
+  "Qwen 3": "#6F5EF9",
+  "Gemma 3": "#8E75FF",
 };
 
 const WIDTH = 1920;
@@ -104,6 +107,8 @@ function getLogoUrl(name: string): string | null {
   if (name.includes("Opus") || name.includes("Sonnet")) return "/assets/logos/claude.svg";
   if (name.includes("Grok")) return "/assets/logos/grok.svg";
   if (name.includes("MiniMax")) return "/assets/logos/minimax.svg";
+  if (name.includes("Qwen")) return "/assets/logos/qwen.svg";
+  if (name.includes("Gemma")) return "/assets/logos/gemini.svg";
   return null;
 }
 

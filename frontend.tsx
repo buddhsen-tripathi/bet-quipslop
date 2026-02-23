@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { createRoot } from "react-dom/client";
 import "./frontend.css";
 
@@ -37,6 +37,7 @@ type RoundState = {
   viewerVotesA?: number;
   viewerVotesB?: number;
   viewerVotingEndsAt?: number;
+  votingPhaseEndsAt?: number;
 };
 type GameState = {
   lastCompleted: RoundState | null;
@@ -48,6 +49,7 @@ type GameState = {
   generation: number;
   modelBalances: Record<string, number>;
   eliminatedModels: string[];
+  viewerBalance?: number;
 };
 type StateMessage = {
   type: "state";
@@ -60,7 +62,11 @@ type ViewerCountMessage = {
   type: "viewerCount";
   viewerCount: number;
 };
-type ServerMessage = StateMessage | ViewerCountMessage;
+type VoteAckMessage = {
+  type: "vote_ack";
+  side: "A" | "B";
+};
+type ServerMessage = StateMessage | ViewerCountMessage | VoteAckMessage;
 
 // ── Model colors & logos ─────────────────────────────────────────────────────
 
@@ -71,9 +77,11 @@ const MODEL_COLORS: Record<string, string> = {
   "GLM-5": "#1F63EC",
   "GPT-5.2": "#10A37F",
   "Opus 4.6": "#D97757",
-  "Sonnet 4.6": "#D97757",
+  "Sonnet 4.6": "#E8956A",
   "Grok 4.1": "#FFFFFF",
   "MiniMax 2.5": "#FF3B30",
+  "Qwen 3": "#6F5EF9",
+  "Gemma 3": "#8E75FF",
 };
 
 function getColor(name: string): string {
@@ -90,6 +98,8 @@ function getLogo(name: string): string | null {
     return "/assets/logos/claude.svg";
   if (name.includes("Grok")) return "/assets/logos/grok.svg";
   if (name.includes("MiniMax")) return "/assets/logos/minimax.svg";
+  if (name.includes("Qwen")) return "/assets/logos/qwen.svg";
+  if (name.includes("Gemma")) return "/assets/logos/gemini.svg";
   return null;
 }
 
@@ -167,6 +177,7 @@ function ContestantCard({
   voters,
   viewerVotes,
   totalViewerVotes,
+  isMyVote,
 }: {
   task: TaskInfo;
   voteCount: number;
@@ -176,6 +187,7 @@ function ContestantCard({
   voters: VoteInfo[];
   viewerVotes?: number;
   totalViewerVotes?: number;
+  isMyVote?: boolean;
 }) {
   const color = getColor(task.model.name);
   const pct = totalVotes > 0 ? Math.round((voteCount / totalVotes) * 100) : 0;
@@ -186,12 +198,13 @@ function ContestantCard({
 
   return (
     <div
-      className={`contestant ${isWinner ? "contestant--winner" : ""}`}
+      className={`contestant ${isWinner ? "contestant--winner" : ""} ${isMyVote ? "contestant--my-vote" : ""}`}
       style={{ "--accent": color } as React.CSSProperties}
     >
       <div className="contestant__head">
         <ModelTag model={task.model} />
         {isWinner && <span className="win-tag">WIN</span>}
+        {isMyVote && <span className="my-vote-tag">YOUR VOTE</span>}
       </div>
 
       <div className="contestant__body">
@@ -225,7 +238,7 @@ function ContestantCard({
               {voters.map((v, i) => {
                 const logo = getLogo(v.voter.name);
                 return (
-                  <span key={i} className="voter-dot-wrap" title={`${v.voter.name}${v.betAmount ? ` blind bet $${v.betAmount} on ${v.betSide ?? "?"}` : ""}`}>
+                  <span key={i} className="voter-dot-wrap" title={v.voter.name}>
                     {logo ? (
                       <img
                         src={logo}
@@ -238,11 +251,6 @@ function ContestantCard({
                         style={{ color: getColor(v.voter.name) }}
                       >
                         {v.voter.name[0]}
-                      </span>
-                    )}
-                    {v.betAmount && (
-                      <span className={`bet-badge ${v.betResult !== undefined ? (v.betResult > 0 ? "bet-badge--won" : v.betResult < 0 ? "bet-badge--lost" : "") : ""}`}>
-                        ${v.betAmount}
                       </span>
                     )}
                   </span>
@@ -298,10 +306,16 @@ function Arena({
   round,
   total,
   viewerVotingSecondsLeft,
+  votingPhaseSecondsLeft,
+  myVote,
+  onVote,
 }: {
   round: RoundState;
   total: number | null;
   viewerVotingSecondsLeft: number;
+  votingPhaseSecondsLeft: number;
+  myVote: "A" | "B" | null;
+  onVote: (side: "A" | "B") => void;
 }) {
   const [contA, contB] = round.contestants;
   const showVotes = round.phase === "voting" || round.phase === "done";
@@ -320,7 +334,8 @@ function Arena({
   const votersB = round.votes.filter((v) => v.votedFor?.name === contB.name);
   const totalViewerVotes = (round.viewerVotesA ?? 0) + (round.viewerVotesB ?? 0);
 
-  const showCountdown = round.phase === "voting" && viewerVotingSecondsLeft > 0;
+  const showCountdown = round.phase === "voting" && votingPhaseSecondsLeft > 0;
+  const showVoteButtons = (round.phase === "betting" || round.phase === "answering" || round.phase === "voting") && viewerVotingSecondsLeft > 0;
 
   const phaseText =
     round.phase === "prompting"
@@ -343,16 +358,10 @@ function Arena({
         <span className="arena__phase">
           {phaseText}
           {showCountdown && (
-            <span className="vote-countdown">{viewerVotingSecondsLeft}s</span>
+            <span className="vote-countdown">{votingPhaseSecondsLeft}s</span>
           )}
         </span>
       </div>
-      {showCountdown && (
-        <div className="vote-hint">
-          Vote in Twitch chat: <strong>1</strong> for left, <strong>2</strong> for right.
-        </div>
-      )}
-
       <PromptCard round={round} />
 
       {showBets && (() => {
@@ -420,6 +429,29 @@ function Arena({
         );
       })()}
 
+      {showVoteButtons && (
+        <div className="vote-buttons">
+          <button
+            className={`vote-btn ${myVote === "A" ? "vote-btn--selected" : ""}`}
+            style={{ "--btn-color": getColor(contA.name) } as React.CSSProperties}
+            onClick={() => onVote("A")}
+            disabled={!!myVote}
+          >
+            {myVote === "A" && <span className="vote-btn__check">&#10003;</span>}
+            {myVote === "A" ? `Locked: ${contA.name}` : `Vote ${contA.name}`}
+          </button>
+          <button
+            className={`vote-btn ${myVote === "B" ? "vote-btn--selected" : ""}`}
+            style={{ "--btn-color": getColor(contB.name) } as React.CSSProperties}
+            onClick={() => onVote("B")}
+            disabled={!!myVote}
+          >
+            {myVote === "B" && <span className="vote-btn__check">&#10003;</span>}
+            {myVote === "B" ? `Locked: ${contB.name}` : `Vote ${contB.name}`}
+          </button>
+        </div>
+      )}
+
       {round.phase !== "prompting" && (
         <div className="showdown">
           <ContestantCard
@@ -431,6 +463,7 @@ function Arena({
             voters={votersA}
             viewerVotes={round.viewerVotesA}
             totalViewerVotes={totalViewerVotes}
+            isMyVote={myVote === "A"}
           />
           <ContestantCard
             task={round.answerTasks[1]}
@@ -441,6 +474,7 @@ function Arena({
             voters={votersB}
             viewerVotes={round.viewerVotesB}
             totalViewerVotes={totalViewerVotes}
+            isMyVote={myVote === "B"}
           />
         </div>
       )}
@@ -454,13 +488,28 @@ function Arena({
 
 // ── Game Over ────────────────────────────────────────────────────────────────
 
-function GameOver({ scores }: { scores: Record<string, number> }) {
+function GameOver({
+  scores,
+  viewerScores,
+  modelBalances,
+  eliminatedModels,
+  viewerBalance,
+}: {
+  scores: Record<string, number>;
+  viewerScores: Record<string, number>;
+  modelBalances: Record<string, number>;
+  eliminatedModels: string[];
+  viewerBalance: number;
+}) {
   const sorted = Object.entries(scores).sort((a, b) => b[1] - a[1]);
   const champion = sorted[0];
+  const runnerUp = sorted[1];
+  const viewerFavorite = Object.entries(viewerScores).sort((a, b) => b[1] - a[1])[0];
 
   return (
     <div className="game-over">
       <div className="game-over__label">Game Over</div>
+
       {champion && champion[1] > 0 && (
         <div className="game-over__winner">
           <span className="game-over__crown">👑</span>
@@ -474,6 +523,74 @@ function GameOver({ scores }: { scores: Record<string, number> }) {
           <span className="game-over__sub">is the funniest AI</span>
         </div>
       )}
+
+      {runnerUp && runnerUp[1] > 0 && (
+        <div className="game-over__runner-up">
+          <span className="game-over__runner-up-label">Runner-up</span>
+          <span style={{ color: getColor(runnerUp[0]) }}>
+            {getLogo(runnerUp[0]) && <img src={getLogo(runnerUp[0])!} alt="" className="game-over__inline-logo" />}
+            {runnerUp[0]}
+          </span>
+          <span className="game-over__runner-up-score">{runnerUp[1]} wins</span>
+        </div>
+      )}
+
+      <div className="game-over__standings">
+        <div className="game-over__section-label">Final Standings</div>
+        <div className="game-over__table">
+          {sorted.map(([name, score], i) => {
+            const balance = modelBalances[name];
+            const eliminated = eliminatedModels.includes(name);
+            return (
+              <div key={name} className={`game-over__row ${eliminated ? "game-over__row--eliminated" : ""}`}>
+                <span className="game-over__row-rank">
+                  {i === 0 && score > 0 ? "👑" : `#${i + 1}`}
+                </span>
+                <span className="game-over__row-name" style={{ color: getColor(name) }}>
+                  {getLogo(name) && <img src={getLogo(name)!} alt="" className="game-over__inline-logo" />}
+                  {name}
+                </span>
+                <span className="game-over__row-score">{score} wins</span>
+                {balance !== undefined && (
+                  <span className={`game-over__row-balance ${eliminated ? "game-over__row-balance--zero" : ""}`}>
+                    ${balance}
+                  </span>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="game-over__viewer-summary">
+        <div className="game-over__section-label">Viewer Stats</div>
+        <div className="game-over__viewer-balance">
+          Final balance: <strong>${viewerBalance}</strong>
+        </div>
+        {viewerFavorite && viewerFavorite[1] > 0 && (
+          <div className="game-over__viewer-fav">
+            Viewer favorite:{" "}
+            <span style={{ color: getColor(viewerFavorite[0]) }}>{viewerFavorite[0]}</span>
+            {" "}({viewerFavorite[1]} wins)
+          </div>
+        )}
+      </div>
+
+      {eliminatedModels.length > 0 && (
+        <div className="game-over__eliminations">
+          <div className="game-over__section-label">Elimination Order</div>
+          <div className="game-over__elim-list">
+            {eliminatedModels.map((name, i) => (
+              <span key={name} className="game-over__elim-chip">
+                <span className="game-over__elim-num">{i + 1}.</span>
+                <span style={{ color: getColor(name) }}>{name}</span>
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <a href="/history" className="game-over__history-link">View Full History</a>
     </div>
   );
 }
@@ -545,12 +662,14 @@ function Standings({
   activeRound,
   modelBalances,
   eliminatedModels,
+  viewerBalance,
 }: {
   scores: Record<string, number>;
   viewerScores: Record<string, number>;
   activeRound: RoundState | null;
   modelBalances: Record<string, number>;
   eliminatedModels: string[];
+  viewerBalance: number;
 }) {
   const competing = activeRound
     ? new Set([
@@ -567,9 +686,9 @@ function Standings({
           <a href="/history" className="standings__link">
             History
           </a>
-          <a href="https://twitch.tv/quipslop" target="_blank" rel="noopener noreferrer" className="standings__link">
+          {/* <a href="https://twitch.tv/quipslop" target="_blank" rel="noopener noreferrer" className="standings__link">
             Twitch
-          </a>
+          </a> */}
           <a href="https://github.com/buddhsen-tripathi/genz-quipslop" target="_blank" rel="noopener noreferrer" className="standings__link">
             GitHub
           </a>
@@ -582,8 +701,12 @@ function Standings({
         modelBalances={modelBalances}
         eliminatedModels={eliminatedModels}
       />
+      <div className="viewer-balance">
+        <span className="viewer-balance__label">Viewers</span>
+        <span className="viewer-balance__amount">${viewerBalance}</span>
+      </div>
       <LeaderboardSection
-        label="Viewers"
+        label="Viewer Picks"
         scores={viewerScores}
         competing={competing}
       />
@@ -615,12 +738,17 @@ function App() {
   const [viewerCount, setViewerCount] = useState(0);
   const [connected, setConnected] = useState(false);
   const [viewerVotingSecondsLeft, setViewerVotingSecondsLeft] = useState(0);
+  const [votingPhaseSecondsLeft, setVotingPhaseSecondsLeft] = useState(0);
+  const [myVote, setMyVote] = useState<"A" | "B" | null>(null);
+  const wsRef = useRef<WebSocket | null>(null);
 
   // Countdown timer for viewer voting
   useEffect(() => {
     const endsAt = state?.active?.viewerVotingEndsAt;
-    if (!endsAt || state?.active?.phase !== "voting") {
+    const phase = state?.active?.phase;
+    if (!endsAt || (phase !== "betting" && phase !== "answering" && phase !== "voting")) {
       setViewerVotingSecondsLeft(0);
+      setMyVote(null);
       return;
     }
 
@@ -633,6 +761,21 @@ function App() {
     return () => clearInterval(interval);
   }, [state?.active?.viewerVotingEndsAt, state?.active?.phase]);
 
+  // Countdown for voting phase display (30s from when voting starts)
+  useEffect(() => {
+    const endsAt = state?.active?.votingPhaseEndsAt;
+    if (!endsAt || state?.active?.phase !== "voting") {
+      setVotingPhaseSecondsLeft(0);
+      return;
+    }
+    function tick() {
+      setVotingPhaseSecondsLeft(Math.max(0, Math.ceil((endsAt! - Date.now()) / 1000)));
+    }
+    tick();
+    const interval = setInterval(tick, 1000);
+    return () => clearInterval(interval);
+  }, [state?.active?.votingPhaseEndsAt, state?.active?.phase]);
+
   useEffect(() => {
     const wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
     const wsUrl = `${wsProtocol}//${window.location.host}/ws`;
@@ -642,6 +785,7 @@ function App() {
     let knownVersion: string | null = null;
     function connect() {
       ws = new WebSocket(wsUrl);
+      wsRef.current = ws;
       ws.onopen = () => setConnected(true);
       ws.onclose = () => {
         setConnected(false);
@@ -659,6 +803,8 @@ function App() {
           setViewerCount(msg.viewerCount);
         } else if (msg.type === "viewerCount") {
           setViewerCount(msg.viewerCount);
+        } else if (msg.type === "vote_ack") {
+          setMyVote(msg.side);
         }
       };
     }
@@ -669,6 +815,12 @@ function App() {
       ws?.close();
     };
   }, []);
+
+  function sendVote(side: "A" | "B") {
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ type: "vote", side }));
+    }
+  }
 
   if (!connected || !state) return <ConnectingScreen />;
 
@@ -702,12 +854,21 @@ function App() {
           </header>
 
           {state.done ? (
-            <GameOver scores={state.scores} />
+            <GameOver
+              scores={state.scores}
+              viewerScores={state.viewerScores ?? {}}
+              modelBalances={state.modelBalances ?? {}}
+              eliminatedModels={state.eliminatedModels ?? []}
+              viewerBalance={state.viewerBalance ?? 1000}
+            />
           ) : displayRound ? (
             <Arena
               round={displayRound}
               total={totalRounds}
               viewerVotingSecondsLeft={viewerVotingSecondsLeft}
+              votingPhaseSecondsLeft={votingPhaseSecondsLeft}
+              myVote={myVote}
+              onVote={sendVote}
             />
           ) : (
             <div className="waiting">
@@ -731,6 +892,7 @@ function App() {
           activeRound={state.active}
           modelBalances={state.modelBalances ?? {}}
           eliminatedModels={state.eliminatedModels ?? []}
+          viewerBalance={state.viewerBalance ?? 1000}
         />
       </div>
     </div>
