@@ -17,6 +17,7 @@ type VoteInfo = {
   startedAt: number;
   finishedAt?: number;
   votedFor?: Model;
+  gifUrl?: string;
   error?: boolean;
 };
 type RoundState = {
@@ -239,6 +240,23 @@ function ContestantCard({
               })}
             </span>
           </div>
+          {voters.some((v) => v.gifUrl) && (
+            <div className="vote-gifs">
+              {voters
+                .filter((v) => v.gifUrl)
+                .map((v, i) => (
+                  <div key={i} className="vote-gif" title={v.voter.name}>
+                    <img src={v.gifUrl} alt="reaction" />
+                    <span
+                      className="vote-gif__label"
+                      style={{ color: getColor(v.voter.name) }}
+                    >
+                      {v.voter.name}
+                    </span>
+                  </div>
+                ))}
+            </div>
+          )}
           {showViewerVotes && (
             <>
               <div className="vote-bar viewer-vote-bar">

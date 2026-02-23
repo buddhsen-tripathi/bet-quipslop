@@ -50,6 +50,7 @@ export type VoteInfo = {
   startedAt: number;
   finishedAt?: number;
   votedFor?: Model;
+  gifUrl?: string;
   error?: boolean;
 };
 
@@ -227,7 +228,11 @@ export async function callGenerateAnswer(
   });
   const { text, usage, reasoning } = await generateText({
     model: openrouter.chat(model.id),
-    system: `You are playing Quiplash! You'll be given a fill-in-the-blank prompt. Give the FUNNIEST possible answer. Be creative, edgy, unexpected, and concise. Reply with ONLY your answer — no quotes, no explanation, no preamble. Keep it short (under 12 words). Keep it concise and witty.`,
+    system: `You are playing Quiplash! You'll be given a fill-in-the-blank prompt. Give the FUNNIEST possible answer.
+
+IMPORTANT: You MUST answer in full Gen Z slang. Use brainrot language, internet slang, and zoomer speak. Think: "no cap", "fr fr", "lowkey", "sus", "its giving", "slay", "rizz", "sigma", "skibidi", "based", "bussin", "delulu", "understood the assignment", "main character energy", "rent free", "vibe check", "ick", "ate and left no crumbs", etc.
+
+Reply with ONLY your answer — no quotes, no explanation, no preamble. Keep it short (under 15 words). Keep it unhinged and chronically online.`,
     prompt: `Fill in the blank: ${prompt}`,
   });
 
@@ -243,7 +248,7 @@ export async function callVote(
   prompt: string,
   a: { answer: string },
   b: { answer: string },
-): Promise<"A" | "B"> {
+): Promise<{ vote: "A" | "B"; gifQuery: string }> {
   log("INFO", `vote:${voter.name}`, "Calling API", {
     modelId: voter.id,
     prompt,
@@ -252,16 +257,51 @@ export async function callVote(
   });
   const { text, usage, reasoning } = await generateText({
     model: openrouter.chat(voter.id),
-    system: `You are a judge in a comedy game. You'll see a fill-in-the-blank prompt and two answers. Pick which answer is FUNNIER. You MUST respond with exactly "A" or "B" — nothing else.`,
-    prompt: `Prompt: "${prompt}"\n\nAnswer A: "${a.answer}"\nAnswer B: "${b.answer}"\n\nWhich is funnier? Reply with just A or B.`,
+    system: `You are a judge in a comedy game. You'll see a fill-in-the-blank prompt and two answers. Pick which answer is FUNNIER.
+
+Respond in EXACTLY this format (two lines):
+Line 1: A or B (your vote)
+Line 2: A 2-3 word reaction describing your reaction as a GIF (e.g. "mind blown", "crying laughing", "spit take", "dead inside", "rolling on floor")
+
+Example response:
+A
+crying laughing`,
+    prompt: `Prompt: "${prompt}"\n\nAnswer A: "${a.answer}"\nAnswer B: "${b.answer}"\n\nWhich is funnier?`,
   });
 
   log("INFO", `vote:${voter.name}`, "Raw response", { rawText: text, usage });
-  const cleaned = text.trim().toUpperCase();
-  if (!cleaned.startsWith("A") && !cleaned.startsWith("B")) {
+  const lines = text.trim().split("\n").map((l) => l.trim()).filter(Boolean);
+  const voteLine = (lines[0] ?? "").toUpperCase();
+  const gifLine = lines[1] ?? "funny reaction";
+
+  if (!voteLine.startsWith("A") && !voteLine.startsWith("B")) {
     throw new Error(`Invalid vote: "${text.trim()}"`);
   }
-  return cleaned.startsWith("A") ? "A" : "B";
+  return {
+    vote: voteLine.startsWith("A") ? "A" : "B",
+    gifQuery: gifLine.replace(/^(gif|reaction):\s*/i, "").trim() || "funny reaction",
+  };
+}
+
+export async function fetchReactionGif(query: string): Promise<string | null> {
+  const apiKey = process.env.GIPHY_API_KEY;
+  if (!apiKey) return null;
+
+  try {
+    const url = `https://api.giphy.com/v1/gifs/search?api_key=${apiKey}&q=${encodeURIComponent(query)}&limit=8&rating=pg-13&lang=en`;
+    const res = await fetch(url, { signal: AbortSignal.timeout(3000) });
+    if (!res.ok) return null;
+    const data = (await res.json()) as {
+      data?: { images?: { fixed_height_small?: { url?: string } } }[];
+    };
+    const results = data.data ?? [];
+    if (results.length === 0) return null;
+    // Pick a random result from top 8 for variety
+    const pick = results[Math.floor(Math.random() * results.length)];
+    return pick?.images?.fixed_height_small?.url ?? null;
+  } catch {
+    return null;
+  }
 }
 
 import { saveRound } from "./db.ts";
@@ -420,7 +460,7 @@ export async function runGame(
 
           const result = await withRetry(
             () => callVote(vote.voter, round.prompt!, first, second),
-            (v) => v === "A" || v === "B",
+            (v) => v.vote === "A" || v.vote === "B",
             3,
             `R${r}:vote:${vote.voter.name}`,
           );
@@ -428,15 +468,22 @@ export async function runGame(
             return;
           }
           const votedFor = showAFirst
-            ? result === "A"
+            ? result.vote === "A"
               ? contA
               : contB
-            : result === "A"
+            : result.vote === "A"
               ? contB
               : contA;
 
           vote.finishedAt = Date.now();
           vote.votedFor = votedFor;
+
+          // Fetch a reaction GIF in the background
+          const gifUrl = await fetchReactionGif(result.gifQuery);
+          if (gifUrl) {
+            vote.gifUrl = gifUrl;
+            rerender();
+          }
         } catch {
           if (state.generation !== roundGeneration) {
             return;

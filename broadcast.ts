@@ -11,6 +11,7 @@ type VoteInfo = {
   startedAt: number;
   finishedAt?: number;
   votedFor?: Model;
+  gifUrl?: string;
   error?: boolean;
 };
 type RoundState = {

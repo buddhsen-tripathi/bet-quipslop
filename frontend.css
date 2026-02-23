@@ -396,6 +396,43 @@ body {
   margin-left: 8px;
 }
 
+/* ── Vote GIF Reactions ──────────────────────────────────────── */
+
+.vote-gifs {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+
+.vote-gif {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  animation: gif-pop 0.4s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.vote-gif img {
+  width: 80px;
+  height: 60px;
+  object-fit: cover;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+}
+
+.vote-gif__label {
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.3px;
+  opacity: 0.7;
+}
+
+@keyframes gif-pop {
+  0% { opacity: 0; transform: scale(0.8); }
+  100% { opacity: 1; transform: scale(1); }
+}
+
 /* ── Tie ──────────────────────────────────────────────────────── */
 
 .tie-label {

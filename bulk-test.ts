@@ -93,14 +93,14 @@ async function runRound(roundNum: number): Promise<RoundResult> {
       const showAFirst = Math.random() > 0.5;
       const first = showAFirst ? { answer: answerA } : { answer: answerB };
       const second = showAFirst ? { answer: answerB } : { answer: answerA };
-      const vote = await withRetry(
+      const result = await withRetry(
         () => callVote(voter, prompt, first, second),
-        (v) => v === "A" || v === "B",
+        (v) => v.vote === "A" || v.vote === "B",
         3,
         `BulkR${roundNum}:vote:${voter.name}`
       );
-      
-      const votedForA = showAFirst ? vote === "A" : vote === "B";
+
+      const votedForA = showAFirst ? result.vote === "A" : result.vote === "B";
       if (votedForA) votesA++; else votesB++;
       roundVotes.push({ voter, votedFor: votedForA ? "A" : "B" });
     } catch (err) {
