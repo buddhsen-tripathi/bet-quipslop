@@ -13,6 +13,7 @@ db.exec(`
   );
 `);
 
+
 export function saveRound(round: RoundState) {
   const insert = db.prepare("INSERT INTO rounds (num, data) VALUES ($num, $data)");
   insert.run({ $num: round.num, $data: JSON.stringify(round) });
@@ -41,3 +42,4 @@ export function clearAllRounds() {
   db.exec("DELETE FROM rounds;");
   db.exec("DELETE FROM sqlite_sequence WHERE name = 'rounds';");
 }
+

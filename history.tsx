@@ -19,10 +19,13 @@ type VoteInfo = {
   votedFor?: Model;
   gifUrl?: string;
   error?: boolean;
+  betSide?: "A" | "B";
+  betAmount?: number;
+  betResult?: number;
 };
 type RoundState = {
   num: number;
-  phase: "prompting" | "answering" | "voting" | "done";
+  phase: "prompting" | "betting" | "answering" | "voting" | "done";
   prompter: Model;
   promptTask: TaskInfo;
   prompt?: string;

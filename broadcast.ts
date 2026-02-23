@@ -13,10 +13,13 @@ type VoteInfo = {
   votedFor?: Model;
   gifUrl?: string;
   error?: boolean;
+  betSide?: "A" | "B";
+  betAmount?: number;
+  betResult?: number;
 };
 type RoundState = {
   num: number;
-  phase: "prompting" | "answering" | "voting" | "done";
+  phase: "prompting" | "betting" | "answering" | "voting" | "done";
   prompter: Model;
   promptTask: TaskInfo;
   prompt?: string;
@@ -37,6 +40,8 @@ type GameState = {
   done: boolean;
   isPaused: boolean;
   generation: number;
+  modelBalances: Record<string, number>;
+  eliminatedModels: string[];
 };
 type StateMessage = {
   type: "state";
@@ -301,8 +306,11 @@ function drawScoreboardSection(
   label: string,
   startY: number,
   entryHeight: number,
+  modelBalances?: Record<string, number>,
+  eliminatedModels?: string[],
 ) {
   const maxScore = entries[0]?.[1] || 1;
+  const eliminated = new Set(eliminatedModels ?? []);
 
   // Section label
   ctx.font = '700 13px "JetBrains Mono", monospace';
@@ -315,8 +323,11 @@ function drawScoreboardSection(
 
   entries.forEach(([name, score], index) => {
     const y = startY + 20 + index * entryHeight;
-    const color = getColor(name);
+    const isEliminated = eliminated.has(name);
+    const color = isEliminated ? "#333" : getColor(name);
     const pct = maxScore > 0 ? score / maxScore : 0;
+
+    ctx.globalAlpha = isEliminated ? 0.35 : 1;
 
     ctx.font = '600 16px "JetBrains Mono", monospace';
     ctx.fillStyle = "#555";
@@ -334,6 +345,17 @@ function drawScoreboardSection(
       ctx.fillText(nameText, WIDTH - 310, y + 18);
     }
 
+    // Show balance if available
+    if (modelBalances && modelBalances[name] !== undefined) {
+      const nameX = drewLogo ? WIDTH - 310 + 26 : WIDTH - 310;
+      ctx.font = '600 16px "Inter", sans-serif';
+      const nameW = ctx.measureText(nameText).width;
+      ctx.font = '600 11px "JetBrains Mono", monospace';
+      ctx.fillStyle = isEliminated ? "#ef4444" : "#555";
+      const balText = isEliminated ? "ELIMINATED" : `$${modelBalances[name]}`;
+      ctx.fillText(balText, nameX + nameW + 8, y + 18);
+    }
+
     roundRect(WIDTH - 310, y + 30, 216, 3, 2, "#1c1c1c");
     if (pct > 0) {
       roundRect(WIDTH - 310, y + 30, Math.max(6, 216 * pct), 3, 2, color);
@@ -344,10 +366,17 @@ function drawScoreboardSection(
     const scoreText = String(score);
     const scoreWidth = ctx.measureText(scoreText).width;
     ctx.fillText(scoreText, WIDTH - 48 - scoreWidth, y + 18);
+
+    ctx.globalAlpha = 1;
   });
 }
 
-function drawScoreboard(scores: Record<string, number>, viewerScores: Record<string, number>) {
+function drawScoreboard(
+  scores: Record<string, number>,
+  viewerScores: Record<string, number>,
+  modelBalances?: Record<string, number>,
+  eliminatedModels?: string[],
+) {
   const modelEntries = Object.entries(scores).sort((a, b) => b[1] - a[1]) as [string, number][];
   const viewerEntries = Object.entries(viewerScores).sort((a, b) => b[1] - a[1]) as [string, number][];
 
@@ -360,7 +389,7 @@ function drawScoreboard(scores: Record<string, number>, viewerScores: Record<str
   ctx.fillText("STANDINGS", WIDTH - 348, 76);
 
   const entryHeight = 52;
-  drawScoreboardSection(modelEntries, "AI JUDGES", 110, entryHeight);
+  drawScoreboardSection(modelEntries, "AI JUDGES", 110, entryHeight, modelBalances, eliminatedModels);
 
   const viewerStartY = 110 + 28 + modelEntries.length * entryHeight + 16;
   drawScoreboardSection(viewerEntries, "VIEWERS", viewerStartY, entryHeight);
@@ -372,11 +401,13 @@ function drawRound(round: RoundState) {
   let phaseLabel =
     (round.phase === "prompting"
       ? "Writing prompt"
-      : round.phase === "answering"
-        ? "Answering"
-        : round.phase === "voting"
-          ? "Judges voting"
-          : "Complete"
+      : round.phase === "betting"
+        ? "Blind bets"
+        : round.phase === "answering"
+          ? "Answering"
+          : round.phase === "voting"
+            ? "Judges voting"
+            : "Complete"
     ).toUpperCase();
 
   // Append countdown during voting phase
@@ -633,7 +664,7 @@ function draw() {
       return;
   }
 
-  drawScoreboard(state.scores, state.viewerScores ?? {});
+  drawScoreboard(state.scores, state.viewerScores ?? {}, state.modelBalances, state.eliminatedModels);
   
   const isNextPrompting = state.active?.phase === "prompting" && !state.active.prompt;
   const displayRound = isNextPrompting && state.lastCompleted ? state.lastCompleted : (state.active ?? state.lastCompleted ?? null);

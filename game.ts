@@ -52,11 +52,14 @@ export type VoteInfo = {
   votedFor?: Model;
   gifUrl?: string;
   error?: boolean;
+  betSide?: "A" | "B";
+  betAmount?: number;
+  betResult?: number;
 };
 
 export type RoundState = {
   num: number;
-  phase: "prompting" | "answering" | "voting" | "done";
+  phase: "prompting" | "betting" | "answering" | "voting" | "done";
   prompter: Model;
   promptTask: TaskInfo;
   prompt?: string;
@@ -78,6 +81,8 @@ export type GameState = {
   done: boolean;
   isPaused: boolean;
   generation: number;
+  modelBalances: Record<string, number>;
+  eliminatedModels: string[];
 };
 
 // ── OpenRouter ──────────────────────────────────────────────────────────────
@@ -243,6 +248,56 @@ Reply with ONLY your answer — no quotes, no explanation, no preamble. Keep it 
   return cleanResponse(text);
 }
 
+export async function callBlindBet(
+  voter: Model,
+  prompt: string,
+  contestantA: Model,
+  contestantB: Model,
+): Promise<{ side: "A" | "B"; confidence: 15 | 25 | 45 }> {
+  log("INFO", `blindbet:${voter.name}`, "Calling API", {
+    modelId: voter.id,
+    prompt,
+    contestantA: contestantA.name,
+    contestantB: contestantB.name,
+  });
+  const { text, usage } = await generateText({
+    model: openrouter.chat(voter.id),
+    system: `You are a judge in a comedy game called Quiplash. Two AI models are about to answer a fill-in-the-blank prompt. You must place a BLIND BET on which model you think will give the funnier answer — you have NOT seen their answers yet.
+
+You only know:
+- The prompt they'll be answering
+- The names of the two contestants
+
+Think about each model's comedy style, strengths, and how they might approach this specific prompt.
+
+Respond in EXACTLY this format (two lines):
+Line 1: A or B (which contestant you're betting on)
+Line 2: 15, 25, or 45 (your confidence — how much you're willing to wager)
+
+Example response:
+A
+25`,
+    prompt: `Prompt: "${prompt}"\n\nContestant A: ${contestantA.name}\nContestant B: ${contestantB.name}\n\nWho do you think will be funnier? Place your blind bet!`,
+  });
+
+  log("INFO", `blindbet:${voter.name}`, "Raw response", { rawText: text, usage });
+  const lines = text.trim().split("\n").map((l) => l.trim()).filter(Boolean);
+  const sideLine = (lines[0] ?? "").toUpperCase();
+  const confLine = parseInt(lines[1] ?? "25", 10);
+
+  if (!sideLine.startsWith("A") && !sideLine.startsWith("B")) {
+    throw new Error(`Invalid blind bet: "${text.trim()}"`);
+  }
+
+  const confidence: 15 | 25 | 45 =
+    confLine === 15 ? 15 : confLine === 45 ? 45 : 25;
+
+  return {
+    side: sideLine.startsWith("A") ? "A" : "B",
+    confidence,
+  };
+}
+
 export async function callVote(
   voter: Model,
   prompt: string,
@@ -277,13 +332,29 @@ crying laughing`,
   if (!voteLine.startsWith("A") && !voteLine.startsWith("B")) {
     throw new Error(`Invalid vote: "${text.trim()}"`);
   }
+
   return {
     vote: voteLine.startsWith("A") ? "A" : "B",
     gifQuery: gifLine.replace(/^(gif|reaction):\s*/i, "").trim() || "funny reaction",
   };
 }
 
-export async function fetchReactionGif(query: string): Promise<string | null> {
+// ── GIF Cache ──────────────────────────────────────────────────────────────
+
+const GIF_CACHE_TTL_MS = 2 * 60 * 60 * 1000; // 2 hours
+const GIF_MAX_MISSES_PER_ROUND = 3;
+const gifCache = new Map<string, { url: string; fetchedAt: number }>();
+let gifMissesThisRound = 0;
+
+export function resetGifFetchBudget() {
+  gifMissesThisRound = 0;
+}
+
+function normalizeGifQuery(query: string): string {
+  return query.toLowerCase().trim().replace(/\s+/g, " ");
+}
+
+async function fetchReactionGifRaw(query: string): Promise<string | null> {
   const apiKey = process.env.GIPHY_API_KEY;
   if (!apiKey) return null;
 
@@ -304,6 +375,63 @@ export async function fetchReactionGif(query: string): Promise<string | null> {
   }
 }
 
+export async function fetchReactionGif(query: string): Promise<string | null> {
+  const key = normalizeGifQuery(query);
+  const now = Date.now();
+
+  // Check cache first
+  const cached = gifCache.get(key);
+  if (cached && now - cached.fetchedAt < GIF_CACHE_TTL_MS) {
+    log("INFO", "gif:cache", "Cache hit", { query: key });
+    return cached.url;
+  }
+
+  // Budget check — skip API call if we've hit the miss limit this round
+  if (gifMissesThisRound >= GIF_MAX_MISSES_PER_ROUND) {
+    log("WARN", "gif:cache", "Round budget exhausted, skipping fetch", {
+      query: key,
+      misses: gifMissesThisRound,
+    });
+    return null;
+  }
+
+  gifMissesThisRound++;
+  const url = await fetchReactionGifRaw(query);
+  if (url) {
+    gifCache.set(key, { url, fetchedAt: now });
+    log("INFO", "gif:cache", "Cache miss → fetched", { query: key });
+  }
+  return url;
+}
+
+const PRESEED_QUERIES = [
+  "mind blown", "crying laughing", "spit take", "dead inside",
+  "rolling on floor", "slow clap", "face palm", "shocked",
+  "disappointed", "laughing hard", "funny reaction", "oh no",
+  "cringe", "genius", "bruh moment", "chef kiss",
+  "standing ovation", "awkward", "savage", "mic drop",
+];
+
+export function preseedGifCache() {
+  const apiKey = process.env.GIPHY_API_KEY;
+  if (!apiKey) return;
+
+  log("INFO", "gif:cache", "Pre-seeding GIF cache", {
+    queries: PRESEED_QUERIES.length,
+  });
+
+  PRESEED_QUERIES.forEach((query, i) => {
+    setTimeout(async () => {
+      const key = normalizeGifQuery(query);
+      if (gifCache.has(key)) return;
+      const url = await fetchReactionGifRaw(query);
+      if (url) {
+        gifCache.set(key, { url, fetchedAt: Date.now() });
+      }
+    }, i * 100);
+  });
+}
+
 import { saveRound } from "./db.ts";
 
 // ── Game loop ───────────────────────────────────────────────────────────────
@@ -319,13 +447,14 @@ export async function runGame(
   if (lastCompletedRound) {
     startRound = lastCompletedRound.num + 1;
   }
-  
+
   let endRound = startRound + runs - 1;
-  
+
   for (let r = startRound; r <= endRound; r++) {
     while (state.isPaused) {
       await new Promise((resolve) => setTimeout(resolve, 1000));
     }
+    resetGifFetchBudget();
     const roundGeneration = state.generation;
 
     // Reset round counter if generation changed (e.g. admin reset)
@@ -336,7 +465,20 @@ export async function runGame(
       endRound = r + runs - 1;
     }
 
-    const shuffled = shuffle([...MODELS]);
+    // Filter to only active (non-eliminated) models
+    const activeModels = MODELS.filter(
+      (m) => !state.eliminatedModels.includes(m.name),
+    );
+
+    if (activeModels.length < 3) {
+      log("WARN", "round", "Not enough active models to continue", {
+        active: activeModels.length,
+        eliminated: state.eliminatedModels,
+      });
+      break;
+    }
+
+    const shuffled = shuffle([...activeModels]);
     const prompter = shuffled[0]!;
     const contA = shuffled[1]!;
     const contB = shuffled[2]!;
@@ -360,6 +502,7 @@ export async function runGame(
       prompter: prompter.name,
       contestants: [contA.name, contB.name],
       voters: voters.map((v) => v.name),
+      activeModels: activeModels.map((m) => m.name),
     });
     rerender();
 
@@ -390,6 +533,40 @@ export async function runGame(
       rerender();
       continue;
     }
+
+    // ── Blind betting phase ── (before answers, models bet on who they think will be funnier)
+    round.phase = "betting";
+    round.votes = voters.map((v) => ({ voter: v, startedAt: Date.now() }));
+    rerender();
+
+    await Promise.all(
+      round.votes.map(async (vote) => {
+        if (state.generation !== roundGeneration) return;
+        try {
+          const result = await withRetry(
+            () => callBlindBet(vote.voter, round.prompt!, contA, contB),
+            (v) => v.side === "A" || v.side === "B",
+            3,
+            `R${r}:blindbet:${vote.voter.name}`,
+          );
+          if (state.generation !== roundGeneration) return;
+          vote.betSide = result.side;
+          vote.betAmount = result.confidence;
+          log("INFO", "blindbet", `${vote.voter.name} blind bet ${result.confidence} on ${result.side} (${result.side === "A" ? contA.name : contB.name})`, {
+            model: vote.voter.name,
+            side: result.side,
+            amount: result.confidence,
+          });
+        } catch {
+          if (state.generation !== roundGeneration) return;
+          // Default bet if API fails
+          vote.betSide = Math.random() > 0.5 ? "A" : "B";
+          vote.betAmount = 15;
+        }
+        rerender();
+      }),
+    );
+    if (state.generation !== roundGeneration) continue;
 
     // ── Answer phase ──
     round.phase = "answering";
@@ -432,12 +609,15 @@ export async function runGame(
       continue;
     }
 
-    // ── Vote phase ──
+    // ── Vote phase ── (models now vote after seeing answers, bets were already locked in)
     round.phase = "voting";
     const answerA = round.answerTasks[0].result!;
     const answerB = round.answerTasks[1].result!;
     const voteStart = Date.now();
-    round.votes = voters.map((v) => ({ voter: v, startedAt: voteStart }));
+    // Reset startedAt for vote phase (bets were placed earlier)
+    for (const v of round.votes) {
+      v.startedAt = voteStart;
+    }
 
     // Initialize viewer voting
     round.viewerVotesA = 0;
@@ -498,7 +678,7 @@ export async function runGame(
       }),
     ),
       // 30-second viewer voting window
-      new Promise((r) => setTimeout(r, 30_000)),
+      new Promise((resolve) => setTimeout(resolve, 30_000)),
     ]);
     if (state.generation !== roundGeneration) {
       continue;
@@ -519,6 +699,63 @@ export async function runGame(
     } else if (votesB > votesA) {
       state.scores[contB.name] = (state.scores[contB.name] || 0) + 1;
     }
+
+    // ── Settle model bets (pool-based) ──
+    const winner: "A" | "B" | "tie" =
+      votesA > votesB ? "A" : votesB > votesA ? "B" : "tie";
+
+    const validBets = round.votes.filter((v) => v.betSide && v.betAmount);
+    const totalPool = validBets.reduce((s, v) => s + (v.betAmount ?? 0), 0);
+    const winnerPool = validBets
+      .filter((v) => v.betSide === winner)
+      .reduce((s, v) => s + (v.betAmount ?? 0), 0);
+
+    for (const v of round.votes) {
+      if (!v.betSide || !v.betAmount) continue;
+      const voterName = v.voter.name;
+
+      if (winner === "tie") {
+        // Tie — everyone gets their bet back, no change
+        v.betResult = 0;
+      } else if (v.betSide === winner) {
+        // Won — get proportional share of the total pool
+        const payout = winnerPool > 0
+          ? Math.round((v.betAmount / winnerPool) * totalPool)
+          : v.betAmount;
+        const profit = payout - v.betAmount;
+        v.betResult = profit;
+        state.modelBalances[voterName] =
+          (state.modelBalances[voterName] ?? 0) + profit;
+      } else {
+        // Lost — lose entire bet (it goes into the pool for winners)
+        v.betResult = -v.betAmount;
+        state.modelBalances[voterName] =
+          (state.modelBalances[voterName] ?? 0) - v.betAmount;
+
+        // Check for elimination
+        if ((state.modelBalances[voterName] ?? 0) <= 0) {
+          state.modelBalances[voterName] = 0;
+          if (!state.eliminatedModels.includes(voterName)) {
+            state.eliminatedModels = [...state.eliminatedModels, voterName];
+            log("WARN", "elimination", `${voterName} has been ELIMINATED!`, {
+              model: voterName,
+              balance: 0,
+            });
+          }
+        }
+      }
+
+      log("INFO", "bet:settle", `${voterName} bet $${v.betAmount} on ${v.betSide} → ${v.betResult > 0 ? "+" : ""}${v.betResult} (pool: $${totalPool}, winner pool: $${winnerPool})`, {
+        model: voterName,
+        bet: v.betAmount,
+        side: v.betSide,
+        result: v.betResult,
+        pool: totalPool,
+        winnerPool,
+        balance: state.modelBalances[voterName],
+      });
+    }
+
     // Viewer vote scoring
     const vvA = round.viewerVotesA ?? 0;
     const vvB = round.viewerVotesB ?? 0;
@@ -527,9 +764,10 @@ export async function runGame(
     } else if (vvB > vvA) {
       state.viewerScores[contB.name] = (state.viewerScores[contB.name] || 0) + 1;
     }
+
     rerender();
 
-    await new Promise((r) => setTimeout(r, 5000));
+    await new Promise((resolve) => setTimeout(resolve, 5000));
     if (state.generation !== roundGeneration) {
       continue;
     }

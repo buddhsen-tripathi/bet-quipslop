@@ -10,6 +10,7 @@ import {
   LOG_FILE,
   log,
   runGame,
+  preseedGifCache,
   type GameState,
   type RoundState,
 } from "./game.ts";
@@ -60,6 +61,8 @@ if (allRounds.length > 0) {
   }
 }
 
+const initialModelBalances = Object.fromEntries(MODELS.map((m) => [m.name, 1000]));
+
 const gameState: GameState = {
   completed: initialCompleted,
   active: null,
@@ -68,6 +71,8 @@ const gameState: GameState = {
   done: false,
   isPaused: false,
   generation: 0,
+  modelBalances: initialModelBalances,
+  eliminatedModels: [],
 };
 
 // ── Guardrails ──────────────────────────────────────────────────────────────
@@ -435,6 +440,8 @@ function getClientState() {
     done: gameState.done,
     isPaused: gameState.isPaused,
     generation: gameState.generation,
+    modelBalances: gameState.modelBalances,
+    eliminatedModels: gameState.eliminatedModels,
   };
 }
 
@@ -719,6 +726,8 @@ const server = Bun.serve<WsData>({
       gameState.active = null;
       gameState.scores = Object.fromEntries(MODELS.map((m) => [m.name, 0]));
       gameState.viewerScores = Object.fromEntries(MODELS.map((m) => [m.name, 0]));
+      gameState.modelBalances = Object.fromEntries(MODELS.map((m) => [m.name, 1000]));
+      gameState.eliminatedModels = [];
       gameState.done = false;
       gameState.isPaused = true;
       gameState.generation += 1;
@@ -925,6 +934,10 @@ log("INFO", "server", `Web server started on port ${server.port}`, {
   runs,
   models: MODELS.map((m) => m.id),
 });
+
+// ── Pre-seed GIF cache ──────────────────────────────────────────────────────
+
+preseedGifCache();
 
 // ── Start game ──────────────────────────────────────────────────────────────
 

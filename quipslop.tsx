@@ -228,6 +228,8 @@ function Game({ runs }: { runs: number }) {
     done: false,
     isPaused: false,
     generation: 0,
+    modelBalances: Object.fromEntries(MODELS.map((m) => [m.name, 1000])),
+    eliminatedModels: [],
   });
   const [, setTick] = useState(0);
   const rerender = useCallback(() => setTick((t) => t + 1), []);

@@ -19,10 +19,13 @@ type VoteInfo = {
   votedFor?: Model;
   gifUrl?: string;
   error?: boolean;
+  betSide?: "A" | "B";
+  betAmount?: number;
+  betResult?: number;
 };
 type RoundState = {
   num: number;
-  phase: "prompting" | "answering" | "voting" | "done";
+  phase: "prompting" | "betting" | "answering" | "voting" | "done";
   prompter: Model;
   promptTask: TaskInfo;
   prompt?: string;
@@ -43,6 +46,8 @@ type GameState = {
   done: boolean;
   isPaused: boolean;
   generation: number;
+  modelBalances: Record<string, number>;
+  eliminatedModels: string[];
 };
 type StateMessage = {
   type: "state";
@@ -219,22 +224,27 @@ function ContestantCard({
             <span className="vote-meta__dots">
               {voters.map((v, i) => {
                 const logo = getLogo(v.voter.name);
-                return logo ? (
-                  <img
-                    key={i}
-                    src={logo}
-                    alt={v.voter.name}
-                    title={v.voter.name}
-                    className="voter-dot"
-                  />
-                ) : (
-                  <span
-                    key={i}
-                    className="voter-dot voter-dot--letter"
-                    style={{ color: getColor(v.voter.name) }}
-                    title={v.voter.name}
-                  >
-                    {v.voter.name[0]}
+                return (
+                  <span key={i} className="voter-dot-wrap" title={`${v.voter.name}${v.betAmount ? ` blind bet $${v.betAmount} on ${v.betSide ?? "?"}` : ""}`}>
+                    {logo ? (
+                      <img
+                        src={logo}
+                        alt={v.voter.name}
+                        className="voter-dot"
+                      />
+                    ) : (
+                      <span
+                        className="voter-dot voter-dot--letter"
+                        style={{ color: getColor(v.voter.name) }}
+                      >
+                        {v.voter.name[0]}
+                      </span>
+                    )}
+                    {v.betAmount && (
+                      <span className={`bet-badge ${v.betResult !== undefined ? (v.betResult > 0 ? "bet-badge--won" : v.betResult < 0 ? "bet-badge--lost" : "") : ""}`}>
+                        ${v.betAmount}
+                      </span>
+                    )}
                   </span>
                 );
               })}
@@ -295,6 +305,8 @@ function Arena({
 }) {
   const [contA, contB] = round.contestants;
   const showVotes = round.phase === "voting" || round.phase === "done";
+  const hasBets = round.votes.some((v) => v.betSide);
+  const showBets = round.phase !== "prompting" && (round.phase === "betting" || hasBets);
   const isDone = round.phase === "done";
 
   let votesA = 0,
@@ -313,11 +325,13 @@ function Arena({
   const phaseText =
     round.phase === "prompting"
       ? "Writing prompt"
-      : round.phase === "answering"
-        ? "Answering"
-        : round.phase === "voting"
-          ? "Judges voting"
-          : "Complete";
+      : round.phase === "betting"
+        ? "Judges placing blind bets"
+        : round.phase === "answering"
+          ? "Answering"
+          : round.phase === "voting"
+            ? "Judges voting"
+            : "Complete";
 
   return (
     <div className="arena">
@@ -340,6 +354,71 @@ function Arena({
       )}
 
       <PromptCard round={round} />
+
+      {showBets && (() => {
+        const betsOnA = round.votes.filter((v) => v.betSide === "A");
+        const betsOnB = round.votes.filter((v) => v.betSide === "B");
+        const poolA = betsOnA.reduce((s, v) => s + (v.betAmount ?? 0), 0);
+        const poolB = betsOnB.reduce((s, v) => s + (v.betAmount ?? 0), 0);
+        const totalPool = poolA + poolB;
+        const isBetting = round.phase === "betting";
+
+        return (
+          <div className={`blind-bets ${isDone ? "blind-bets--settled" : ""}`}>
+            <div className="blind-bets__header">
+              <div className="blind-bets__label">
+                {isBetting ? <>Blind bets<Dots /></> : "Blind bets"}
+              </div>
+              {totalPool > 0 && (
+                <div className="blind-bets__pool">Pool: ${totalPool}</div>
+              )}
+            </div>
+            {totalPool > 0 && (
+              <div className="blind-bets__sides">
+                <div className="blind-bets__side">
+                  <span className="blind-bets__side-name" style={{ color: getColor(contA.name) }}>
+                    {contA.name}
+                  </span>
+                  <span className="blind-bets__side-amount">${poolA}</span>
+                </div>
+                <div className="blind-bets__bar">
+                  <div
+                    className="blind-bets__bar-fill blind-bets__bar-fill--a"
+                    style={{ width: `${totalPool > 0 ? (poolA / totalPool) * 100 : 50}%`, background: getColor(contA.name) }}
+                  />
+                  <div
+                    className="blind-bets__bar-fill blind-bets__bar-fill--b"
+                    style={{ width: `${totalPool > 0 ? (poolB / totalPool) * 100 : 50}%`, background: getColor(contB.name) }}
+                  />
+                </div>
+                <div className="blind-bets__side">
+                  <span className="blind-bets__side-name" style={{ color: getColor(contB.name) }}>
+                    {contB.name}
+                  </span>
+                  <span className="blind-bets__side-amount">${poolB}</span>
+                </div>
+              </div>
+            )}
+            <div className="blind-bets__list">
+              {round.votes.map((v, i) => (
+                <span key={i} className={`blind-bet-chip ${v.betSide ? "blind-bet-chip--placed" : ""} ${isDone && v.betResult !== undefined ? (v.betResult > 0 ? "blind-bet-chip--won" : v.betResult < 0 ? "blind-bet-chip--lost" : "") : ""}`}>
+                  <ModelTag model={v.voter} small />
+                  {v.betSide && v.betAmount && (
+                    <span className="blind-bet-chip__amount">
+                      ${v.betAmount} on {v.betSide === "A" ? contA.name : contB.name}
+                      {isDone && v.betResult !== undefined && (
+                        <span className={`blind-bet-chip__result ${v.betResult > 0 ? "blind-bet-chip__result--won" : v.betResult < 0 ? "blind-bet-chip__result--lost" : ""}`}>
+                          {v.betResult > 0 ? ` +$${v.betResult}` : v.betResult < 0 ? ` -$${Math.abs(v.betResult)}` : " push"}
+                        </span>
+                      )}
+                    </span>
+                  )}
+                </span>
+              ))}
+            </div>
+          </div>
+        );
+      })()}
 
       {round.phase !== "prompting" && (
         <div className="showdown">
@@ -405,13 +484,18 @@ function LeaderboardSection({
   label,
   scores,
   competing,
+  modelBalances,
+  eliminatedModels,
 }: {
   label: string;
   scores: Record<string, number>;
   competing: Set<string>;
+  modelBalances?: Record<string, number>;
+  eliminatedModels?: string[];
 }) {
   const sorted = Object.entries(scores).sort((a, b) => b[1] - a[1]);
   const maxScore = sorted[0]?.[1] || 1;
+  const eliminated = new Set(eliminatedModels ?? []);
 
   return (
     <div className="lb-section">
@@ -423,18 +507,24 @@ function LeaderboardSection({
           const pct = maxScore > 0 ? Math.round((score / maxScore) * 100) : 0;
           const color = getColor(name);
           const active = competing.has(name);
+          const isEliminated = eliminated.has(name);
+          const balance = modelBalances?.[name];
           return (
             <div
               key={name}
-              className={`lb-entry ${active ? "lb-entry--active" : ""}`}
+              className={`lb-entry ${active ? "lb-entry--active" : ""} ${isEliminated ? "lb-entry--eliminated" : ""}`}
             >
               <div className="lb-entry__top">
                 <span className="lb-entry__rank">
                   {i === 0 && score > 0 ? "👑" : i + 1}
                 </span>
                 <ModelTag model={{ id: name, name }} small />
+                {isEliminated && <span className="eliminated-badge">ELIMINATED</span>}
                 <span className="lb-entry__score">{score}</span>
               </div>
+              {balance !== undefined && (
+                <div className="lb-entry__balance">${balance}</div>
+              )}
               <div className="lb-entry__bar">
                 <div
                   className="lb-entry__fill"
@@ -453,10 +543,14 @@ function Standings({
   scores,
   viewerScores,
   activeRound,
+  modelBalances,
+  eliminatedModels,
 }: {
   scores: Record<string, number>;
   viewerScores: Record<string, number>;
   activeRound: RoundState | null;
+  modelBalances: Record<string, number>;
+  eliminatedModels: string[];
 }) {
   const competing = activeRound
     ? new Set([
@@ -476,7 +570,7 @@ function Standings({
           <a href="https://twitch.tv/quipslop" target="_blank" rel="noopener noreferrer" className="standings__link">
             Twitch
           </a>
-          <a href="https://github.com/T3-Content/quipslop" target="_blank" rel="noopener noreferrer" className="standings__link">
+          <a href="https://github.com/buddhsen-tripathi/genz-quipslop" target="_blank" rel="noopener noreferrer" className="standings__link">
             GitHub
           </a>
         </div>
@@ -485,6 +579,8 @@ function Standings({
         label="AI Judges"
         scores={scores}
         competing={competing}
+        modelBalances={modelBalances}
+        eliminatedModels={eliminatedModels}
       />
       <LeaderboardSection
         label="Viewers"
@@ -629,7 +725,13 @@ function App() {
           )}
         </main>
 
-        <Standings scores={state.scores} viewerScores={state.viewerScores ?? {}} activeRound={state.active} />
+        <Standings
+          scores={state.scores}
+          viewerScores={state.viewerScores ?? {}}
+          activeRound={state.active}
+          modelBalances={state.modelBalances ?? {}}
+          eliminatedModels={state.eliminatedModels ?? []}
+        />
       </div>
     </div>
   );
