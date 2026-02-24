@@ -835,15 +835,23 @@ body {
 }
 
 .game-over__row-balance {
-  color: #4ade80;
+  color: var(--text-dim);
   font-size: 12px;
   min-width: 50px;
   text-align: right;
 }
 
 .game-over__row-balance--zero {
-  color: #ef4444;
+  color: var(--text-muted);
 }
+
+.game-over__row-net {
+  font-size: 11px;
+  min-width: 55px;
+  text-align: right;
+}
+.game-over__row-net--positive { color: #4ade80; }
+.game-over__row-net--negative { color: #ef4444; opacity: 0.7; }
 
 .game-over__viewer-balance,
 .game-over__viewer-fav {

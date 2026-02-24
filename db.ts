@@ -43,3 +43,17 @@ export function clearAllRounds() {
   db.exec("DELETE FROM sqlite_sequence WHERE name = 'rounds';");
 }
 
+export function getRoundCount(): number {
+  const row = db.query("SELECT COUNT(*) as count FROM rounds").get() as { count: number };
+  return row.count;
+}
+
+export function importRounds(rounds: RoundState[]) {
+  const insert = db.prepare("INSERT INTO rounds (num, data) VALUES ($num, $data)");
+  db.transaction(() => {
+    for (const round of rounds) {
+      insert.run({ $num: round.num, $data: JSON.stringify(round) });
+    }
+  })();
+}
+

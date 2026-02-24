@@ -50,6 +50,7 @@ type GameState = {
   modelBalances: Record<string, number>;
   eliminatedModels: string[];
   viewerBalance?: number;
+  completedRounds?: number;
 };
 type StateMessage = {
   type: "state";
@@ -494,12 +495,16 @@ function GameOver({
   modelBalances,
   eliminatedModels,
   viewerBalance,
+  isPausedSummary,
+  completedRounds,
 }: {
   scores: Record<string, number>;
   viewerScores: Record<string, number>;
   modelBalances: Record<string, number>;
   eliminatedModels: string[];
   viewerBalance: number;
+  isPausedSummary?: boolean;
+  completedRounds?: number;
 }) {
   const sorted = Object.entries(scores).sort((a, b) => b[1] - a[1]);
   const champion = sorted[0];
@@ -508,7 +513,14 @@ function GameOver({
 
   return (
     <div className="game-over">
-      <div className="game-over__label">Game Over</div>
+      <div className="game-over__label">
+        {isPausedSummary ? "Season Summary \u2014 Paused" : "Game Over"}
+      </div>
+      {isPausedSummary && (
+        <div className="game-over__sub" style={{ color: "var(--text-muted)", marginBottom: "1rem", fontSize: "0.9rem" }}>
+          Game is paused{completedRounds ? ` after ${completedRounds} rounds` : ""}. Here's the summary so far.
+        </div>
+      )}
 
       {champion && champion[1] > 0 && (
         <div className="game-over__winner">
@@ -556,6 +568,15 @@ function GameOver({
                     ${balance}
                   </span>
                 )}
+                {balance !== undefined && (() => {
+                  const net = balance - 1000;
+                  if (net === 0) return null;
+                  return (
+                    <span className={`game-over__row-net ${net > 0 ? "game-over__row-net--positive" : "game-over__row-net--negative"}`}>
+                      {net > 0 ? `+$${net}` : `-$${Math.abs(net)}`}
+                    </span>
+                  );
+                })()}
               </div>
             );
           })}
@@ -860,6 +881,17 @@ function App() {
               modelBalances={state.modelBalances ?? {}}
               eliminatedModels={state.eliminatedModels ?? []}
               viewerBalance={state.viewerBalance ?? 1000}
+              completedRounds={state.completedRounds}
+            />
+          ) : state.isPaused && !state.active && state.lastCompleted ? (
+            <GameOver
+              scores={state.scores}
+              viewerScores={state.viewerScores ?? {}}
+              modelBalances={state.modelBalances ?? {}}
+              eliminatedModels={state.eliminatedModels ?? []}
+              viewerBalance={state.viewerBalance ?? 1000}
+              isPausedSummary
+              completedRounds={state.completedRounds}
             />
           ) : displayRound ? (
             <Arena

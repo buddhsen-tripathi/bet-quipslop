@@ -4,7 +4,7 @@ import indexHtml from "./index.html";
 import historyHtml from "./history.html";
 import adminHtml from "./admin.html";
 import broadcastHtml from "./broadcast.html";
-import { clearAllRounds, getRounds, getAllRounds } from "./db.ts";
+import { clearAllRounds, getRounds, getAllRounds, getRoundCount, importRounds } from "./db.ts";
 import {
   MODELS,
   LOG_FILE,
@@ -29,13 +29,31 @@ if (!process.env.OPENROUTER_API_KEY) {
   process.exit(1);
 }
 
+// ── Seed DB from backup if empty ─────────────────────────────────────────────
+if (getRoundCount() === 0) {
+  const backupPath = process.env.BACKUP_PATH ?? "./quipslop-backup.json";
+  const backupFile = Bun.file(backupPath);
+  if (await backupFile.exists()) {
+    const backup = await backupFile.json() as { rounds?: RoundState[] };
+    if (backup.rounds && backup.rounds.length > 0) {
+      const sorted = [...backup.rounds].sort((a, b) => a.num - b.num);
+      importRounds(sorted);
+      console.log(`Seeded ${sorted.length} rounds from backup (${backupPath})`);
+    }
+  }
+}
+
 const allRounds = getAllRounds();
 const initialScores = Object.fromEntries(MODELS.map((m) => [m.name, 0]));
 const initialViewerScores = Object.fromEntries(MODELS.map((m) => [m.name, 0]));
+const initialModelBalances = Object.fromEntries(MODELS.map((m) => [m.name, 1000]));
+const initialEliminatedModels: string[] = [];
+let initialViewerBalance = 1000;
 
 let initialCompleted: RoundState[] = [];
 if (allRounds.length > 0) {
   for (const round of allRounds) {
+    // Reconstruct win scores
     if (round.scoreA !== undefined && round.scoreB !== undefined) {
       if (round.scoreA > round.scoreB) {
         initialScores[round.contestants[0].name] =
@@ -45,6 +63,8 @@ if (allRounds.length > 0) {
           (initialScores[round.contestants[1].name] || 0) + 1;
       }
     }
+
+    // Reconstruct viewer vote scores
     const vvA = round.viewerVotesA ?? 0;
     const vvB = round.viewerVotesB ?? 0;
     if (vvA > vvB) {
@@ -54,14 +74,58 @@ if (allRounds.length > 0) {
       initialViewerScores[round.contestants[1].name] =
         (initialViewerScores[round.contestants[1].name] || 0) + 1;
     }
+
+    // Reconstruct model balances from betResult
+    for (const v of round.votes) {
+      if (v.betResult !== undefined && v.betResult !== 0) {
+        const name = v.voter.name;
+        initialModelBalances[name] = (initialModelBalances[name] ?? 0) + v.betResult;
+        if ((initialModelBalances[name] ?? 0) <= 0) {
+          initialModelBalances[name] = 0;
+          if (!initialEliminatedModels.includes(name)) {
+            initialEliminatedModels.push(name);
+          }
+        }
+      }
+    }
+
+    // Reconstruct viewer balance (pool-based: $25 bet per round)
+    const VIEWER_BET = 25;
+    const viewerPick: "A" | "B" | null = vvA > vvB ? "A" : vvB > vvA ? "B" : null;
+    const viewerInPool = viewerPick !== null && initialViewerBalance >= VIEWER_BET;
+    if (viewerInPool && round.scoreA !== undefined && round.scoreB !== undefined) {
+      const winner: "A" | "B" | "tie" =
+        (round.scoreA ?? 0) > (round.scoreB ?? 0) ? "A"
+        : (round.scoreB ?? 0) > (round.scoreA ?? 0) ? "B"
+        : "tie";
+
+      if (winner !== "tie") {
+        const validBets = round.votes.filter((v) => v.betSide && v.betAmount);
+        const modelPool = validBets.reduce((s, v) => s + (v.betAmount ?? 0), 0);
+        const totalPool = modelPool + VIEWER_BET;
+        const modelWinnerPool = validBets
+          .filter((v) => v.betSide === winner)
+          .reduce((s, v) => s + (v.betAmount ?? 0), 0);
+        const viewerOnWinningSide = viewerPick === winner;
+        const winnerPool = modelWinnerPool + (viewerOnWinningSide ? VIEWER_BET : 0);
+
+        if (viewerOnWinningSide) {
+          const payout = winnerPool > 0
+            ? Math.round((VIEWER_BET / winnerPool) * totalPool)
+            : VIEWER_BET;
+          initialViewerBalance += payout - VIEWER_BET;
+        } else {
+          initialViewerBalance = Math.max(0, initialViewerBalance - VIEWER_BET);
+        }
+      }
+    }
   }
+
   const lastRound = allRounds[allRounds.length - 1];
   if (lastRound) {
     initialCompleted = [lastRound];
   }
 }
-
-const initialModelBalances = Object.fromEntries(MODELS.map((m) => [m.name, 1000]));
 
 const gameState: GameState = {
   completed: initialCompleted,
@@ -69,11 +133,11 @@ const gameState: GameState = {
   scores: initialScores,
   viewerScores: initialViewerScores,
   done: false,
-  isPaused: false,
+  isPaused: process.env.START_PAUSED !== "false",
   generation: 0,
   modelBalances: initialModelBalances,
-  eliminatedModels: [],
-  viewerBalance: 1000,
+  eliminatedModels: initialEliminatedModels,
+  viewerBalance: initialViewerBalance,
 };
 
 // ── Guardrails ──────────────────────────────────────────────────────────────
@@ -437,6 +501,7 @@ function getClientState() {
     modelBalances: gameState.modelBalances,
     eliminatedModels: gameState.eliminatedModels,
     viewerBalance: gameState.viewerBalance,
+    completedRounds: gameState.completed.at(-1)?.num ?? 0,
   };
 }
 
@@ -936,16 +1001,38 @@ const server = Bun.serve<WsData>({
 
 console.log(`\n🎮 quipslop Web — http://localhost:${server.port}`);
 console.log(`📡 WebSocket — ws://localhost:${server.port}/ws`);
-console.log(`🎯 ${runs} rounds with ${MODELS.length} models\n`);
+console.log(`🎯 ${runs} rounds with ${MODELS.length} models`);
+if (gameState.isPaused) {
+  console.log(`⏸️  Started PAUSED — ${allRounds.length} rounds loaded, next round: ${(gameState.completed.at(-1)?.num ?? 0) + 1}`);
+}
+console.log("");
 
 log("INFO", "server", `Web server started on port ${server.port}`, {
   runs,
   models: MODELS.map((m) => m.id),
+  paused: gameState.isPaused,
+  roundsLoaded: allRounds.length,
 });
 
 // ── Pre-seed GIF cache ──────────────────────────────────────────────────────
 
 preseedGifCache();
+
+// ── Periodic backup (runs regardless of pause state) ─────────────────────────
+{
+  const backupPath = process.env.BACKUP_PATH ?? "./quipslop-backup.json";
+  const BACKUP_INTERVAL_MS = 5 * 60 * 1000; // every 5 minutes
+  setInterval(async () => {
+    try {
+      const rounds = getAllRounds();
+      if (rounds.length === 0) return;
+      await Bun.write(backupPath, JSON.stringify({ rounds }, null, 2));
+      console.log(`💾 Backup: ${rounds.length} rounds → ${backupPath}`);
+    } catch (err) {
+      console.error("Backup failed:", err);
+    }
+  }, BACKUP_INTERVAL_MS);
+}
 
 // ── Start game ──────────────────────────────────────────────────────────────
 
