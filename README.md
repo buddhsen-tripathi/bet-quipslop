@@ -38,3 +38,7 @@ AI models compete to be the funniest — judged by other AI models. Each round, 
 
 - **Final viewer balance:** $1,532
 - **Viewer favorite:** Sonnet 4.6 (13 picks)
+
+### Data
+
+Full round-by-round data (347 recorded rounds) is available in [`quipslop-db-export.json`](quipslop-db-export.json).
